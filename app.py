@@ -669,12 +669,41 @@ def render_family_tree(model):
     }}
 
     #details {{
-        width: 300px;
+        position: relative;
+        width: 0;
+        padding: 0;
+        overflow: hidden;
         background: white;
-        border-left: 1px solid #e2e8f0;
-        padding: 16px;
-        overflow-y: auto;
+        border-left: 0;
+        transition: width 0.25s ease, padding 0.25s ease;
     }}
+
+    #details.open {{
+        width: 300px;
+        padding: 16px;
+        border-left: 1px solid #e2e8f0;
+    }}
+
+    #details-close {{
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        width: 30px;
+        height: 30px;
+        border: 0;
+        border-radius: 6px;
+        background: #f1f5f9;
+        color: #334155;
+        cursor: pointer;
+        font-size: 18px;
+        line-height: 30px;
+        padding: 0;
+        z-index: 2;
+    }}
+
+    #details-close:hover {{ background: #e2e8f0; }}
+
+    #details-content {{ padding-top: 28px; }}
 
     #details h3 {{ margin: 0 0 8px; font-size: 19px; color: #0f172a; }}
     #details .muted {{ color: #64748b; font-size: 12px; margin-bottom: 12px; }}
@@ -724,7 +753,7 @@ def render_family_tree(model):
     .highlighted .node-name {{ fill: #020617; }}
 
     @media (max-width: 900px) {{
-        #details {{ width: 250px; }}
+        #details.open {{ width: 250px; }}
         #legend {{ display: none; }}
         #toolbar input {{ width: 210px; }}
     }}
@@ -754,8 +783,11 @@ def render_family_tree(model):
             <div id="help">Click a person to highlight their immediate family. Drag to pan • Wheel to zoom.</div>
         </div>
         <aside id="details">
-            <h3>Family Tree</h3>
-            <div class="muted">Select a person to see their details.</div>
+            <button id="details-close" title="Close details">×</button>
+            <div id="details-content">
+                <h3>Family Tree</h3>
+                <div class="muted">Select a person to see their details.</div>
+            </div>
         </aside>
     </div>
 </div>
@@ -880,6 +912,9 @@ function showDetails(personId) {{
     const person = persons.get(personId);
     if (!person) return;
 
+    detailsEl.classList.add('open');
+    setTimeout(() => fitToScreen(), 260);
+
     const spouse = person.spouse_id ? persons.get(person.spouse_id) : null;
     const unit = [...units.values()].find(u => u.members.includes(personId));
     const parents = [];
@@ -903,7 +938,7 @@ function showDetails(personId) {{
         extra = `<div style="margin-top:12px;padding:9px;background:#fff7ed;border-left:4px solid #f59e0b;border-radius:6px;font-size:12px;color:#9a3412;">Spouse name was found in another person's row, but this person's own record is not in the spreadsheet.</div>`;
     }}
 
-    detailsEl.innerHTML = `
+    document.getElementById('details-content').innerHTML = `
         <h3>${{escapeHtml(person.name)}}</h3>
         <div class="muted">${{person.gender === 'Other' ? 'Details partially available' : 'Family member'}}</div>
         ${{rows.map(r => `<div class="detail-row"><span class="detail-label">${{escapeHtml(r[0])}}</span><span class="detail-value">${{escapeHtml(String(r[1]))}}</span></div>`).join('')}}
@@ -1141,16 +1176,68 @@ function findPerson() {{
 
 document.getElementById('searchBtn').addEventListener('click', findPerson);
 searchInput.addEventListener('keydown', event => {{ if (event.key === 'Enter') findPerson(); }});
+
+document.getElementById('details-close').addEventListener('click', () => {{
+    detailsEl.classList.remove('open');
+    selectedPersonId = null;
+
+    nodesLayer.selectAll('.family-unit')
+        .classed('dimmed', false)
+        .classed('highlighted', false);
+
+    edgesLayer.selectAll('.parent-edge, .spouse-edge-group')
+        .classed('dimmed', false);
+
+    searchStatus.textContent = '';
+    setTimeout(() => fitToScreen(), 260);
+}});
+function getZoomAnchor() {{
+    // Keep the selected person visually stable while zooming. If nothing is
+    // selected, zoom around the center of the visible chart.
+    if (selectedPersonId != null) {{
+        const unit = [...units.values()].find(u => u.members.includes(selectedPersonId));
+        if (unit) {{
+            const memberIndex = unit.members.indexOf(selectedPersonId);
+            const x = unit._x + memberIndex * (CARD_W + COUPLE_GAP) + CARD_W / 2;
+            const y = unit._y + CARD_H / 2;
+            const transform = d3.zoomTransform(svg.node());
+            return [
+                x * transform.k + transform.x,
+                y * transform.k + transform.y
+            ];
+        }}
+    }}
+
+    return [chartWrap.clientWidth / 2, chartWrap.clientHeight / 2];
+}}
+
+function zoomKeepingFocus(factor) {{
+    const transform = d3.zoomTransform(svg.node());
+    const [px, py] = getZoomAnchor();
+    const nextScale = Math.max(0.25, Math.min(2.5, transform.k * factor));
+    const ratio = nextScale / transform.k;
+
+    // Transform around the anchor point instead of letting the chart drift.
+    const nextX = px - (px - transform.x) * ratio;
+    const nextY = py - (py - transform.y) * ratio;
+
+    svg.transition()
+        .duration(250)
+        .call(zoom.transform, d3.zoomIdentity.translate(nextX, nextY).scale(nextScale));
+}}
+
 document.getElementById('fitBtn').addEventListener('click', fitToScreen);
-document.getElementById('zoomInBtn').addEventListener('click', () => svg.transition().call(zoom.scaleBy, 1.25));
-document.getElementById('zoomOutBtn').addEventListener('click', () => svg.transition().call(zoom.scaleBy, 0.8));
+document.getElementById('zoomInBtn').addEventListener('click', () => zoomKeepingFocus(1.25));
+document.getElementById('zoomOutBtn').addEventListener('click', () => zoomKeepingFocus(0.8));
 document.getElementById('resetBtn').addEventListener('click', () => {{
     selectedPersonId = null;
     nodesLayer.selectAll('.family-unit').classed('dimmed', false).classed('highlighted', false);
     edgesLayer.selectAll('.parent-edge, .spouse-edge-group').classed('dimmed', false);
     searchStatus.textContent = '';
-    detailsEl.innerHTML = '<h3>Family Tree</h3><div class="muted">Select a person to see their details.</div>';
-    fitToScreen();
+    detailsEl.classList.remove('open');
+    document.getElementById('details-content').innerHTML =
+        '<h3>Family Tree</h3><div class="muted">Select a person to see their details.</div>';
+    setTimeout(() => fitToScreen(), 260);
 }});
 
 chartWrap.addEventListener('dblclick', () => fitToScreen());
